@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { Cover } from '@/types/cover'
+import { positionLabel } from '@/types/cover'
 import { joinCn } from '@/utils/id'
 import ScarceTag from './ScarceTag.vue'
 
@@ -16,6 +18,8 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{ select: [cover: Cover] }>()
+
+const storageText = computed(() => positionLabel(props.cover))
 
 function onSelect(): void {
   emit('select', props.cover)
@@ -47,6 +51,7 @@ function routeText(cover: Cover): string {
       <p class="cover-card__meta">
         贴票 {{ stampCount }} 枚 · 关联邮戳 {{ pmCount }} 枚
       </p>
+      <p class="cover-card__meta">页位：{{ storageText }}</p>
       <p class="cover-card__via">中转：{{ joinCn(cover.viaPoints, '直封') }}</p>
     </div>
   </article>

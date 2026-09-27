@@ -11,7 +11,7 @@ import { usePostmarkStore } from '@/stores/postmarkStore'
 import { useRouteStore } from '@/stores/routeStore'
 import type { ImagePayload } from '@/stores/postmarkStore'
 import type { Cover, FrankingItem } from '@/types/cover'
-import { CONDITION_GRADES, createEmptyCover } from '@/types/cover'
+import { CONDITION_GRADES, coverPosition, createEmptyCover, isCompletePosition, positionLabel } from '@/types/cover'
 import { clearDraft, loadDraft, saveDraft } from '@/utils/draft'
 import { joinCn, nowIso, toNumber } from '@/utils/id'
 
@@ -130,6 +130,14 @@ async function submit(): Promise<void> {
     ElMessage.warning('至少登记一条贴票构成')
     return
   }
+  const pos = coverPosition(form)
+  if (isCompletePosition(pos)) {
+    const occupant = coverStore.occupantAt(pos)
+    if (occupant) {
+      ElMessage.error(`该格位已被 ${occupant.coverNo} 占用，请更换册名、页码或格位`)
+      return
+    }
+  }
   const coverNo = form.coverNo || coverStore.nextCoverNo()
   const id = await coverStore.create(
     {
@@ -172,7 +180,7 @@ function routeLabel(routeId: number | null): string {
       <div>
         <h1 class="gb-page__title">实寄封目录</h1>
         <p class="gb-page__subtitle">
-          共 {{ coverStore.total }} 封，其中给据邮件 {{ coverStore.registeredCount }} 封；按收寄地、年代、品相、是否给据筛选。
+          共 {{ coverStore.total }} 封，其中给据邮件 {{ coverStore.registeredCount }} 封；按收寄地、年代、品相、是否给据与藏册筛选。
         </p>
       </div>
       <div class="cover-page__actions">
@@ -206,6 +214,11 @@ function routeLabel(routeId: number | null): string {
             <el-option label="全部" value="" />
             <el-option label="仅给据" value="yes" />
             <el-option label="仅平信" value="no" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="藏册">
+          <el-select v-model="filters.album" placeholder="全部" clearable style="width: 130px">
+            <el-option v-for="name in coverStore.albumNames" :key="name" :label="name" :value="name" />
           </el-select>
         </el-form-item>
         <el-form-item label="排序">
@@ -261,6 +274,9 @@ function routeLabel(routeId: number | null): string {
       </el-table-column>
       <el-table-column label="给据" width="80">
         <template #default="{ row }">{{ row.registered ? '是' : '否' }}</template>
+      </el-table-column>
+      <el-table-column label="页位" min-width="150">
+        <template #default="{ row }">{{ positionLabel(row) }}</template>
       </el-table-column>
       <el-table-column label="邮路" min-width="150">
         <template #default="{ row }">{{ routeLabel(row.routeId) }}</template>
@@ -375,10 +391,25 @@ function routeLabel(routeId: number | null): string {
               <el-input-number v-model="form.price" :min="0" :precision="0" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
-            <el-form-item label="藏册页位">
-              <el-input v-model="form.storageAlbum" placeholder="如 甲册 3 页" />
+          <el-col :span="8">
+            <el-form-item label="藏册册名">
+              <el-input v-model="form.storageAlbumName" placeholder="如 甲册" />
             </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="页码">
+              <el-input-number v-model="form.storagePage" :min="1" :precision="0" placeholder="页" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="格位">
+              <el-input v-model="form.storageSlot" placeholder="如 A1 / 上左" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <p class="cover-page__storage-hint">
+              册名、页码、格位三项补全后才参与格位占用；目标格已有别封时会提示其封号并拦住。
+            </p>
           </el-col>
           <el-col :span="12">
             <el-form-item label="正面图">
@@ -493,6 +524,11 @@ function routeLabel(routeId: number | null): string {
   gap: 12px;
 }
 .cover-page__draft {
+  font-size: 12px;
+  color: var(--gb-muted);
+}
+.cover-page__storage-hint {
+  margin: -6px 0 10px;
   font-size: 12px;
   color: var(--gb-muted);
 }

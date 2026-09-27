@@ -19,6 +19,14 @@ import {
   createEmptyStampEntry
 } from '@/types/stampentry'
 import { CONDITION_GRADES } from '@/types/cover'
+import type { AlbumPosition, StorageMove } from '@/types/cover'
+import {
+  createEmptyPosition,
+  formatPosition,
+  isCompletePosition,
+  normalizePosition,
+  positionLabel
+} from '@/types/cover'
 import { loadAssets, saveAsset } from '@/utils/db'
 import { nowIso } from '@/utils/id'
 
@@ -46,6 +54,54 @@ const activePostmark = ref<Postmark | null>(null)
 const entryForm = reactive<StamplessEntry>(createEmptyStampEntry(0))
 
 const entries = computed<StamplessEntry[]>(() => coverStore.entriesOf(coverId.value))
+
+/* ------------------------------ 页位调拨 ------------------------------ */
+
+const moveForm = reactive<AlbumPosition>(createEmptyPosition())
+const moving = ref(false)
+
+/** 当前页位展示文本（三项未补全时提示，不参与占用） */
+const currentPositionText = computed(() =>
+  cover.value ? positionLabel(cover.value) : '未入册'
+)
+
+/** 调拨记录，最新一次排在前面 */
+const storageMoves = computed<StorageMove[]>(() =>
+  [...(cover.value?.storageMoves ?? [])].sort((a, b) => b.movedAt.localeCompare(a.movedAt))
+)
+
+function fmtMoveTime(iso: string): string {
+  return iso ? iso.replace('T', ' ').slice(0, 16) : '—'
+}
+
+async function submitMove(): Promise<void> {
+  const id = coverId.value
+  if (id == null) return
+  const target = normalizePosition(moveForm)
+  if (!isCompletePosition(target)) {
+    ElMessage.warning('请补全册名、页码与格位三项后再调拨')
+    return
+  }
+  moving.value = true
+  try {
+    const result = await coverStore.moveStorage(id, target)
+    if (!result.ok) {
+      if (result.reason === 'conflict') {
+        ElMessage.error(`该格位已被 ${result.conflictNo} 占用，未做调拨`)
+      } else if (result.reason === 'same') {
+        ElMessage.info('该封已在目标页位，无需调拨')
+      } else {
+        ElMessage.warning('调拨未完成，请核对目标页位')
+      }
+      return
+    }
+    await load()
+    Object.assign(moveForm, createEmptyPosition())
+    ElMessage.success(`已调拨至 ${formatPosition(target)}，原格位已释放`)
+  } finally {
+    moving.value = false
+  }
+}
 
 onMounted(async () => {
   if (!coverStore.loaded) await coverStore.load()
@@ -239,7 +295,8 @@ function openRoute(): void {
           <div><dt>给据邮件</dt><dd>{{ cover.registered ? '是' : '否' }}</dd></div>
           <div><dt>来源</dt><dd>{{ cover.acquireFrom || '未记' }}</dd></div>
           <div><dt>购入价</dt><dd>{{ cover.price }} 元</dd></div>
-          <div><dt>藏册页位</dt><dd>{{ cover.storageAlbum || '未入册' }}</dd></div>
+          <div><dt>当前页位</dt><dd>{{ currentPositionText }}</dd></div>
+          <div v-if="cover.storageAlbum"><dt>原页位记录</dt><dd>{{ cover.storageAlbum }}</dd></div>
           <div><dt>所属邮路</dt><dd>{{ route ? `${route.routeNo} ${route.name}` : '未挂邮路' }}</dd></div>
         </dl>
         <div class="cover-detail__grade">
@@ -253,6 +310,59 @@ function openRoute(): void {
           </el-radio-group>
           <ScarceTag :level="cover.conditionGrade" kind="grade" prefix="当前：" />
         </div>
+      </section>
+
+      <section class="gb-panel">
+        <h2 class="gb-panel__title">页位调拨</h2>
+        <p class="cover-detail__storage-current">
+          当前页位：<strong>{{ currentPositionText }}</strong>
+          <span v-if="cover.storageAlbum" class="cover-detail__storage-legacy">
+            原页位记录：{{ cover.storageAlbum }}
+          </span>
+        </p>
+        <el-form :inline="true" @submit.prevent>
+          <el-form-item label="册名">
+            <el-select
+              v-model="moveForm.album"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="选择或输入册名"
+              style="width: 160px"
+            >
+              <el-option
+                v-for="name in coverStore.albumNames"
+                :key="name"
+                :label="name"
+                :value="name"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="页码">
+            <el-input-number v-model="moveForm.page" :min="1" :precision="0" style="width: 120px" />
+          </el-form-item>
+          <el-form-item label="格位">
+            <el-input v-model="moveForm.slot" placeholder="如 A1 / 上左" style="width: 140px" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="moving" @click="submitMove">调拨到此格</el-button>
+          </el-form-item>
+        </el-form>
+        <template v-if="storageMoves.length">
+          <h3 class="cover-detail__moves-title">调拨记录（{{ storageMoves.length }} 次）</h3>
+          <el-table :data="storageMoves" border stripe size="small">
+            <el-table-column label="调拨时间" width="170">
+              <template #default="{ row }">{{ fmtMoveTime(row.movedAt) }}</template>
+            </el-table-column>
+            <el-table-column label="调拨前" min-width="180">
+              <template #default="{ row }">{{ row.from ? formatPosition(row.from) : '未入册' }}</template>
+            </el-table-column>
+            <el-table-column label="调拨后" min-width="180">
+              <template #default="{ row }">{{ formatPosition(row.to) }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <p v-else class="gb-empty">尚无调拨记录，首次调拨后会在此留下前后位置与日期。</p>
       </section>
 
       <section class="cover-detail__figures">
@@ -413,6 +523,24 @@ function openRoute(): void {
 .cover-detail__grade-label {
   font-size: 13px;
   color: var(--gb-muted);
+}
+.cover-detail__storage-current {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--gb-muted);
+}
+.cover-detail__storage-current strong {
+  color: #5d3325;
+}
+.cover-detail__storage-legacy {
+  margin-left: 14px;
+  font-size: 12px;
+  color: var(--gb-muted);
+}
+.cover-detail__moves-title {
+  margin: 14px 0 8px;
+  font-size: 14px;
+  color: #5d3325;
 }
 .cover-detail__figures {
   display: grid;

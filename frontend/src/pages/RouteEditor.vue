@@ -7,6 +7,7 @@ import { buildTimeline, useCoverRoute } from '@/hooks/useCoverRoute'
 import { computeTotalDays, createRouteNode, useRouteStore } from '@/stores/routeStore'
 import { useCoverStore } from '@/stores/coverStore'
 import type { Cover } from '@/types/cover'
+import { createEmptyCover } from '@/types/cover'
 import type { PostalRoute, RouteNode, TimelineNode } from '@/types/route'
 import { TRANSPORT_MODES, createEmptyRoute } from '@/types/route'
 import { toGanzhi, validateChronology } from '@/utils/dateRange'
@@ -77,26 +78,14 @@ const fallbackTimeline = computed<TimelineNode[]>(() => {
   if (!route.value) return []
   return buildTimeline(
     {
+      ...createEmptyCover(),
       id: 0,
       coverNo: 'REF',
       sentFrom: route.value.nodes[0]?.office ?? '',
       sentTo: route.value.nodes[route.value.nodes.length - 1]?.office ?? '',
       postDate: route.value.nodes[0]?.arriveDate ?? '',
       arriveDate: route.value.nodes[route.value.nodes.length - 1]?.arriveDate ?? '',
-      franking: [],
-      cancelPmIds: [],
-      routeId: route.value.id ?? null,
-      viaPoints: [],
-      registered: false,
-      conditionGrade: '中品',
-      acquireFrom: '',
-      price: 0,
-      storageAlbum: '',
-      frontImage: '',
-      backImage: '',
-      note: '',
-      createdAt: '',
-      updatedAt: ''
+      routeId: route.value.id ?? null
     },
     route.value
   )
