@@ -11,7 +11,7 @@ import type { AssetOwnerType, AssetSide, CatalogAsset } from '@/types/asset'
 
 export const DB_NAME = 'gbpostmark'
 /** 当前数据结构版本号，升级迁移写在下面对应的 version() 中 */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export class GbPostmarkDatabase extends Dexie {
   postmarks!: Table<Postmark, number>
@@ -73,6 +73,18 @@ export class GbPostmarkDatabase extends Dexie {
             if (typeof rt.totalDays !== 'number') rt.totalDays = 0
           })
       })
+
+    // v3：藏册页位由自由文字改为结构化格位（册名+页码+格位），三项补全后参与占用；
+    // 新增格位复合索引用于占用查重，旧文字保留在 storageAlbum 仅作查看。
+    this.version(DB_VERSION).stores({
+      postmarks:
+        '++id, pmNo, type, office, province, yearFrom, yearTo, scarceLevel, inkColor, bilingual',
+      covers:
+        '++id, coverNo, sentFrom, sentTo, postDate, conditionGrade, registered, routeId, acquireFrom, albumName, [albumName+pageNo+slotNo]',
+      routes: '++id, routeNo, name, era, transport, totalDays',
+      stampEntries: '++id, coverId, stampName, variety, issueYear',
+      assets: '++id, ownerType, ownerId, side, [ownerType+ownerId]'
+    })
   }
 }
 
@@ -377,6 +389,31 @@ function seedCovers(): Cover[] {
       acquireFrom: '春季邮品交流',
       price: 3800,
       storageAlbum: '甲册 3 页',
+      albumName: '甲册',
+      pageNo: 3,
+      slotNo: 2,
+      storageMoves: [
+        {
+          date: '2024-05-01',
+          fromAlbumName: '',
+          fromPageNo: null,
+          fromSlotNo: null,
+          toAlbumName: '甲册',
+          toPageNo: 1,
+          toSlotNo: 1,
+          note: '登记入册'
+        },
+        {
+          date: '2024-05-10',
+          fromAlbumName: '甲册',
+          fromPageNo: 1,
+          fromSlotNo: 1,
+          toAlbumName: '甲册',
+          toPageNo: 3,
+          toSlotNo: 2,
+          note: '搬册后重新定位'
+        }
+      ],
       frontImage: coverThumbDataUrl('CV-0001', '上海', '南京', '1910-06-18'),
       backImage: '',
       note: '挂号实寄，封背有三处中转戳，戳面完整。',
@@ -399,6 +436,21 @@ function seedCovers(): Cover[] {
       acquireFrom: '旧书摊收得',
       price: 1200,
       storageAlbum: '乙册 1 页',
+      albumName: '乙册',
+      pageNo: 1,
+      slotNo: 3,
+      storageMoves: [
+        {
+          date: '2024-05-01',
+          fromAlbumName: '',
+          fromPageNo: null,
+          fromSlotNo: null,
+          toAlbumName: '乙册',
+          toPageNo: 1,
+          toSlotNo: 3,
+          note: '登记入册'
+        }
+      ],
       frontImage: coverThumbDataUrl('CV-0002', '天津', '上海', '1921-03-05'),
       backImage: '',
       note: '平信，封舌有裂口，票戳关系清晰。',
@@ -424,6 +476,21 @@ function seedCovers(): Cover[] {
       acquireFrom: '家族旧藏',
       price: 460,
       storageAlbum: '丙册 2 页',
+      albumName: '丙册',
+      pageNo: 2,
+      slotNo: 1,
+      storageMoves: [
+        {
+          date: '2024-05-01',
+          fromAlbumName: '',
+          fromPageNo: null,
+          fromSlotNo: null,
+          toAlbumName: '丙册',
+          toPageNo: 2,
+          toSlotNo: 1,
+          note: '登记入册'
+        }
+      ],
       frontImage: coverThumbDataUrl('CV-0003', '广州', '武汉', '1936-09-12'),
       backImage: '',
       note: '封体有水渍，邮路节点仍可辨读。',
@@ -446,6 +513,21 @@ function seedCovers(): Cover[] {
       acquireFrom: '邮友交换',
       price: 120,
       storageAlbum: '丁册 4 页',
+      albumName: '丁册',
+      pageNo: 4,
+      slotNo: 2,
+      storageMoves: [
+        {
+          date: '2024-05-01',
+          fromAlbumName: '',
+          fromPageNo: null,
+          fromSlotNo: null,
+          toAlbumName: '丁册',
+          toPageNo: 4,
+          toSlotNo: 2,
+          note: '登记入册'
+        }
+      ],
       frontImage: coverThumbDataUrl('CV-0004', '南京', '杭州', '1958-04-02'),
       backImage: '',
       note: '到达日期待考，暂按邮路班期推定。',

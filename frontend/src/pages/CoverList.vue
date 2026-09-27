@@ -11,7 +11,7 @@ import { usePostmarkStore } from '@/stores/postmarkStore'
 import { useRouteStore } from '@/stores/routeStore'
 import type { ImagePayload } from '@/stores/postmarkStore'
 import type { Cover, FrankingItem } from '@/types/cover'
-import { CONDITION_GRADES, createEmptyCover } from '@/types/cover'
+import { CONDITION_GRADES, SlotOccupiedError, coverSlotLabel, createEmptyCover, normalizeSlot } from '@/types/cover'
 import { clearDraft, loadDraft, saveDraft } from '@/utils/draft'
 import { joinCn, nowIso, toNumber } from '@/utils/id'
 
@@ -121,6 +121,25 @@ const routeOptions = computed(() =>
   )
 )
 
+/** 册名筛选选项：取当前已入册封的册名去重。 */
+const albumOptions = computed(() => {
+  const names = new Set<string>()
+  for (const c of coverStore.list) {
+    const name = c.albumName?.trim()
+    if (name) names.add(name)
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+})
+
+/** 表单中三项补全后的目标格位；未补全为 null（不参与占用）。 */
+const formSlot = computed(() => normalizeSlot(form.albumName, form.pageNo, form.slotNo))
+
+/** 目标格位的占用情况（已有别封时给出其封号，用于提交前提示并拦住）。 */
+const slotOccupant = computed(() => {
+  if (!formSlot.value) return null
+  return coverStore.findOccupant(formSlot.value)
+})
+
 async function submit(): Promise<void> {
   if (!form.sentFrom.trim() || !form.sentTo.trim()) {
     ElMessage.warning('请填写寄出地与收件地')
@@ -131,18 +150,38 @@ async function submit(): Promise<void> {
     return
   }
   const coverNo = form.coverNo || coverStore.nextCoverNo()
-  const id = await coverStore.create(
-    {
-      ...form,
-      coverNo,
-      franking: form.franking.map((f) => ({ ...f })),
-      cancelPmIds: [...form.cancelPmIds],
-      viaPoints: [...form.viaPoints],
-      routeId: typeof form.routeId === 'number' ? form.routeId : null,
-      price: toNumber(form.price)
-    },
-    { front: frontImage.value ?? undefined, back: backImage.value ?? undefined }
-  )
+  const slot = normalizeSlot(form.albumName, form.pageNo, form.slotNo)
+  if (form.albumName.trim() || form.pageNo != null || form.slotNo != null) {
+    if (!slot) {
+      ElMessage.warning('页位需册名、页码、格位三项补全后才会占用；请补全或全部留空')
+      return
+    }
+  }
+  let id: number
+  try {
+    id = await coverStore.create(
+      {
+        ...form,
+        coverNo,
+        albumName: slot?.albumName ?? '',
+        pageNo: slot?.pageNo ?? null,
+        slotNo: slot?.slotNo ?? null,
+        storageMoves: [],
+        franking: form.franking.map((f) => ({ ...f })),
+        cancelPmIds: [...form.cancelPmIds],
+        viaPoints: [...form.viaPoints],
+        routeId: typeof form.routeId === 'number' ? form.routeId : null,
+        price: toNumber(form.price)
+      },
+      { front: frontImage.value ?? undefined, back: backImage.value ?? undefined }
+    )
+  } catch (err) {
+    if (err instanceof SlotOccupiedError) {
+      ElMessage.error(`${err.message}，请改放到空的格位`)
+      return
+    }
+    throw err
+  }
   clearDraft('cover')
   draftHint.value = ''
   dialogVisible.value = false
@@ -208,6 +247,17 @@ function routeLabel(routeId: number | null): string {
             <el-option label="仅平信" value="no" />
           </el-select>
         </el-form-item>
+        <el-form-item label="藏册">
+          <el-select
+            v-model="filters.album"
+            placeholder="全部册"
+            clearable
+            filterable
+            style="width: 140px"
+          >
+            <el-option v-for="name in albumOptions" :key="name" :label="name" :value="name" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="排序">
           <el-select v-model="filters.sortKey" style="width: 150px">
             <el-option label="最近更新" value="recent" />
@@ -261,6 +311,9 @@ function routeLabel(routeId: number | null): string {
       </el-table-column>
       <el-table-column label="给据" width="80">
         <template #default="{ row }">{{ row.registered ? '是' : '否' }}</template>
+      </el-table-column>
+      <el-table-column label="当前页位" min-width="150">
+        <template #default="{ row }">{{ coverSlotLabel(row) }}</template>
       </el-table-column>
       <el-table-column label="邮路" min-width="150">
         <template #default="{ row }">{{ routeLabel(row.routeId) }}</template>
@@ -376,8 +429,57 @@ function routeLabel(routeId: number | null): string {
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="藏册页位">
-              <el-input v-model="form.storageAlbum" placeholder="如 甲册 3 页" />
+            <el-form-item label="藏册">
+              <el-input v-model="form.albumName" placeholder="册名，如 甲册" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="页 / 格">
+              <div class="cover-page__slot">
+                <el-input-number
+                  v-model="form.pageNo"
+                  :min="1"
+                  :precision="0"
+                  :value-on-clear="null"
+                  controls-position="right"
+                  placeholder="页码"
+                  style="width: 50%"
+                />
+                <el-input-number
+                  v-model="form.slotNo"
+                  :min="1"
+                  :precision="0"
+                  :value-on-clear="null"
+                  controls-position="right"
+                  placeholder="格位"
+                  style="width: 50%"
+                />
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-form-item label=" ">
+              <p class="cover-page__slot-hint">
+                <template v-if="slotOccupant">
+                  <el-alert
+                    :title="`格位已被 ${slotOccupant.coverNo} 占用，保存会被拦截，请改放空格`"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+                </template>
+                <template v-else-if="formSlot">
+                  <el-alert
+                    :title="`将入位：${coverSlotLabel(form)}（三项补全后该格即被本封占用）`"
+                    type="success"
+                    :closable="false"
+                    show-icon
+                  />
+                </template>
+                <template v-else>
+                  <span class="cover-page__draft">册名、页码、格位三项补全后才参与格位占用；留空表示尚未入册。</span>
+                </template>
+              </p>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -478,6 +580,15 @@ function routeLabel(routeId: number | null): string {
   align-items: center;
 }
 .cover-page__franking {
+  width: 100%;
+}
+.cover-page__slot {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.cover-page__slot-hint {
+  margin: 0;
   width: 100%;
 }
 .cover-page__franking-actions {

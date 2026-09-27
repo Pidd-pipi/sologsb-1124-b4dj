@@ -22,6 +22,8 @@ export interface CatalogFilters {
   conditionGrade: string
   /** 是否给据邮件 */
   registered: '' | 'yes' | 'no'
+  /** 藏册名（实寄封当前页位） */
+  album: string
   /** 运输方式 */
   transport: string
   sortKey: SortKey
@@ -39,6 +41,7 @@ export function defaultFilters(): CatalogFilters {
     scarceLevel: '',
     conditionGrade: '',
     registered: '',
+    album: '',
     transport: '',
     sortKey: 'recent'
   }
@@ -94,6 +97,11 @@ function keywordHaystack(kind: CatalogKind, row: AnyRow): string {
       textOf(row.sentFrom),
       textOf(row.sentTo),
       textOf(row.acquireFrom),
+      // 当前页位（册名 + 页码 + 格位）
+      textOf(row.albumName),
+      row.pageNo == null ? '' : `${row.pageNo}页`,
+      row.slotNo == null ? '' : `${row.slotNo}格`,
+      // 旧版自由文字页位保留，仍可检索
       textOf(row.storageAlbum),
       textOf(row.note),
       Array.isArray(row.viaPoints) ? (row.viaPoints as string[]).join(' ') : ''
@@ -145,6 +153,8 @@ export function useCatalogFilter<T>(
         }
         if (filters.registered === 'yes' && row.registered !== true) return false
         if (filters.registered === 'no' && row.registered !== false) return false
+        // 册名按当前页位筛选
+        if (filters.album && textOf(row.albumName) !== filters.album) return false
         if (office) {
           const hay = `${textOf(row.sentFrom)} ${textOf(row.sentTo)}`.toLowerCase()
           if (!hay.includes(office)) return false

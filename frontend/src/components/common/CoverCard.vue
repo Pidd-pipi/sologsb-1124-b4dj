@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { Cover } from '@/types/cover'
+import { coverSlot } from '@/types/cover'
 import { joinCn } from '@/utils/id'
 import ScarceTag from './ScarceTag.vue'
 
@@ -24,6 +26,8 @@ function onSelect(): void {
 function routeText(cover: Cover): string {
   return `${cover.sentFrom || '寄出地待考'} → ${cover.sentTo || '收件地待考'}`
 }
+
+const slot = computed(() => coverSlot(props.cover))
 </script>
 
 <template>
@@ -46,6 +50,9 @@ function routeText(cover: Cover): string {
       </p>
       <p class="cover-card__meta">
         贴票 {{ stampCount }} 枚 · 关联邮戳 {{ pmCount }} 枚
+      </p>
+      <p v-if="slot" class="cover-card__meta cover-card__slot">
+        当前页位：{{ slot.albumName }} {{ slot.pageNo }} 页 {{ slot.slotNo }} 格
       </p>
       <p class="cover-card__via">中转：{{ joinCn(cover.viaPoints, '直封') }}</p>
     </div>
@@ -121,5 +128,8 @@ function routeText(cover: Cover): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.cover-card__slot {
+  color: #8c3b2e;
 }
 </style>

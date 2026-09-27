@@ -19,8 +19,19 @@ import {
   createEmptyStampEntry
 } from '@/types/stampentry'
 import { CONDITION_GRADES } from '@/types/cover'
+import {
+  SlotOccupiedError,
+  coverSlot,
+  coverSlotLabel,
+  moveFromSlot,
+  moveToSlot,
+  normalizeSlot,
+  slotLabel,
+  type StorageMoveRecord
+} from '@/types/cover'
 import { loadAssets, saveAsset } from '@/utils/db'
 import { nowIso } from '@/utils/id'
+import { todayLocal } from '@/utils/dateRange'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
@@ -46,6 +57,121 @@ const activePostmark = ref<Postmark | null>(null)
 const entryForm = reactive<StamplessEntry>(createEmptyStampEntry(0))
 
 const entries = computed<StamplessEntry[]>(() => coverStore.entriesOf(coverId.value))
+
+/* ------------------------------ 页位调拨 ------------------------------ */
+
+const moveDialog = ref(false)
+const moveForm = reactive({
+  albumName: '',
+  pageNo: null as number | null,
+  slotNo: null as number | null,
+  date: todayLocal(),
+  note: ''
+})
+
+/** 该封当前格位（三项不全为 null）。 */
+const currentSlot = computed(() => (cover.value ? coverSlot(cover.value) : null))
+
+/** 调拨记录，最新一次在最前。 */
+const moveHistory = computed<StorageMoveRecord[]>(() =>
+  [...(cover.value?.storageMoves ?? [])].reverse()
+)
+
+/** 旧版自由文字页位，仅保留查看。 */
+const legacySlotText = computed(() => cover.value?.storageAlbum?.trim() ?? '')
+
+/** 全部在册名，供调拨时选择/新建。 */
+const albumOptions = computed(() => {
+  const names = new Set<string>()
+  for (const c of coverStore.list) {
+    const name = c.albumName?.trim()
+    if (name) names.add(name)
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+})
+
+/** 调拨表单里三项补全后的目标格位。 */
+const targetSlot = computed(() =>
+  normalizeSlot(moveForm.albumName, moveForm.pageNo, moveForm.slotNo)
+)
+
+/** 目标格位占用者（排除本封），用于在确认前指出封号并拦住。 */
+const targetOccupant = computed(() => {
+  const id = coverId.value
+  if (!targetSlot.value) return null
+  return coverStore.findOccupant(targetSlot.value, id ?? undefined)
+})
+
+/** 目标与当前格位相同则视为无需调拨。 */
+const sameAsCurrent = computed(() => {
+  return !!currentSlot.value && !!targetSlot.value &&
+    currentSlot.value.albumName === targetSlot.value.albumName &&
+    currentSlot.value.pageNo === targetSlot.value.pageNo &&
+    currentSlot.value.slotNo === targetSlot.value.slotNo
+})
+
+function openMoveDialog(): void {
+  // 默认沿用当前册名，页码/格位留空，便于只改其中一项
+  moveForm.albumName = currentSlot.value?.albumName ?? ''
+  moveForm.pageNo = null
+  moveForm.slotNo = null
+  moveForm.date = todayLocal()
+  moveForm.note = ''
+  moveDialog.value = true
+}
+
+async function submitMove(): Promise<void> {
+  const id = coverId.value
+  if (id == null) return
+  if (!targetSlot.value) {
+    ElMessage.warning('请补全册名、页码与格位三项')
+    return
+  }
+  if (sameAsCurrent.value) {
+    ElMessage.warning('目标格位与当前格位相同，无需调拨')
+    return
+  }
+  if (!moveForm.date) {
+    ElMessage.warning('请选择调拨日期')
+    return
+  }
+  if (targetOccupant.value) {
+    ElMessage.error(
+      `${slotLabel(targetSlot.value)} 已被 ${targetOccupant.value.coverNo} 占用，请改放到空格`
+    )
+    return
+  }
+  try {
+    await coverStore.allocateSlot(
+      id,
+      {
+        albumName: targetSlot.value.albumName,
+        pageNo: targetSlot.value.pageNo,
+        slotNo: targetSlot.value.slotNo
+      },
+      moveForm.date,
+      moveForm.note,
+      legacySlotText.value
+    )
+  } catch (err) {
+    if (err instanceof SlotOccupiedError) {
+      ElMessage.error(`${err.message}，调拨已取消`)
+      return
+    }
+    throw err
+  }
+  moveDialog.value = false
+  await load()
+  ElMessage.success('页位已调拨，旧格位已释放')
+}
+
+function moveFromText(move: StorageMoveRecord): string {
+  return slotLabel(moveFromSlot(move)) || '册外（未入册）'
+}
+
+function moveToText(move: StorageMoveRecord): string {
+  return slotLabel(moveToSlot(move)) || '—'
+}
 
 onMounted(async () => {
   if (!coverStore.loaded) await coverStore.load()
@@ -239,7 +365,7 @@ function openRoute(): void {
           <div><dt>给据邮件</dt><dd>{{ cover.registered ? '是' : '否' }}</dd></div>
           <div><dt>来源</dt><dd>{{ cover.acquireFrom || '未记' }}</dd></div>
           <div><dt>购入价</dt><dd>{{ cover.price }} 元</dd></div>
-          <div><dt>藏册页位</dt><dd>{{ cover.storageAlbum || '未入册' }}</dd></div>
+          <div><dt>当前页位</dt><dd>{{ coverSlotLabel(cover) }}</dd></div>
           <div><dt>所属邮路</dt><dd>{{ route ? `${route.routeNo} ${route.name}` : '未挂邮路' }}</dd></div>
         </dl>
         <div class="cover-detail__grade">
@@ -280,6 +406,44 @@ function openRoute(): void {
             <el-button size="small">上传/替换背面图</el-button>
           </el-upload>
         </div>
+      </section>
+
+      <section class="gb-panel">
+        <div class="cover-detail__section-head">
+          <h2 class="gb-panel__title">藏册页位</h2>
+          <el-button size="small" type="primary" @click="openMoveDialog">
+            {{ currentSlot ? '调拨页位' : '补全页位入册' }}
+          </el-button>
+        </div>
+        <dl class="gb-facts">
+          <div><dt>当前格位</dt><dd>{{ coverSlotLabel(cover) }}</dd></div>
+          <div v-if="legacySlotText">
+            <dt>旧文字页位</dt>
+            <dd>
+              {{ legacySlotText }}
+              <span class="cover-detail__legacy-hint">（旧版自由文字，仅留存查看，不参与占用）</span>
+            </dd>
+          </div>
+          <div>
+            <dt>调拨次数</dt>
+            <dd>{{ moveHistory.length }} 次</dd>
+          </div>
+        </dl>
+
+        <h3 class="cover-detail__move-title">调拨记录</h3>
+        <p v-if="!moveHistory.length" class="gb-empty">尚无页位记录；补全册名、页码、格位三项后即可入册。</p>
+        <el-table v-else :data="moveHistory" border stripe size="small">
+          <el-table-column prop="date" label="日期" width="120" />
+          <el-table-column label="原格位" min-width="160">
+            <template #default="{ row }">{{ moveFromText(row) }}</template>
+          </el-table-column>
+          <el-table-column label="新格位" min-width="160">
+            <template #default="{ row }">{{ moveToText(row) }}</template>
+          </el-table-column>
+          <el-table-column prop="note" label="事由" min-width="180">
+            <template #default="{ row }">{{ row.note || '—' }}</template>
+          </el-table-column>
+        </el-table>
       </section>
 
       <section class="gb-panel">
@@ -364,6 +528,94 @@ function openRoute(): void {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="moveDialog" :title="currentSlot ? '调拨页位' : '补全页位入册'" width="560px">
+      <el-form label-width="96px">
+        <el-form-item label="当前格位">
+          <span class="cover-detail__move-current">{{ cover ? coverSlotLabel(cover) : '未入册' }}</span>
+        </el-form-item>
+        <el-form-item label="目标册名">
+          <el-select
+            v-model="moveForm.albumName"
+            placeholder="选择或输入册名"
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            style="width: 100%"
+          >
+            <el-option v-for="name in albumOptions" :key="name" :label="name" :value="name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="目标页/格">
+          <div class="cover-detail__move-slot">
+            <el-input-number
+              v-model="moveForm.pageNo"
+              :min="1"
+              :precision="0"
+              :value-on-clear="null"
+              controls-position="right"
+              placeholder="页码"
+              style="width: 50%"
+            />
+            <el-input-number
+              v-model="moveForm.slotNo"
+              :min="1"
+              :precision="0"
+              :value-on-clear="null"
+              controls-position="right"
+              placeholder="格位"
+              style="width: 50%"
+            />
+          </div>
+        </el-form-item>
+        <el-form-item label="调拨日期">
+          <el-date-picker
+            v-model="moveForm.date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="事由">
+          <el-input v-model="moveForm.note" type="textarea" :rows="2" placeholder="如 搬册后重新定位" />
+        </el-form-item>
+        <el-form-item label=" ">
+          <el-alert
+            v-if="targetOccupant"
+            :title="`格位已被 ${targetOccupant.coverNo} 占用，调拨会被拦截，请改放空格`"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+          <el-alert
+            v-else-if="sameAsCurrent"
+            title="目标格位与当前格位相同，无需调拨"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
+          <el-alert
+            v-else-if="targetSlot"
+            :title="`将调拨至：${slotLabel(targetSlot)}；保存后旧格位立即释放`"
+            type="success"
+            :closable="false"
+            show-icon
+          />
+          <span v-else class="cover-detail__legacy-hint">补全册名、页码、格位三项后才参与占用。</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="moveDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!targetSlot || sameAsCurrent || !!targetOccupant"
+          @click="submitMove"
+        >
+          确认调拨
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="exportDialog" title="票戳明细导出" width="620px">
       <el-input v-model="exportText" type="textarea" :rows="12" readonly />
       <template #footer>
@@ -441,6 +693,24 @@ function openRoute(): void {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+}
+.cover-detail__legacy-hint {
+  font-size: 12px;
+  color: var(--gb-muted);
+}
+.cover-detail__move-title {
+  margin: 14px 0 8px;
+  font-size: 14px;
+  color: #5d3325;
+}
+.cover-detail__move-current {
+  font-weight: 600;
+  color: #5d3325;
+}
+.cover-detail__move-slot {
+  display: flex;
+  gap: 8px;
+  width: 100%;
 }
 .cover-detail__pm img {
   max-width: 100%;
